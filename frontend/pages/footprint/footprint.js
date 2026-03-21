@@ -8,16 +8,16 @@ window.FootprintPage = (() => {
     coin:     localStorage.getItem('fp_coin') || 'BTC',
     interval: parseInt(localStorage.getItem('fp_interval') || '60'),
     imbalanceThreshold: parseFloat(localStorage.getItem('fp_imb_thr') || '0.70'),
-    showImbalance: localStorage.getItem('fp_show_imb') !== 'false',
-    showVWAP:      localStorage.getItem('fp_show_vwap') !== 'false',
+    showImbalance:   localStorage.getItem('fp_show_imb')  !== 'false',
+    showVWAP:        localStorage.getItem('fp_show_vwap') !== 'false',
     showLargeTrades: true,
     maxBubble: 18,
   };
 
-  let candles  = [];
-  let session  = {};
-  let imbalance = { current: 0, history: [] };
-  let cvdHistory = [];
+  let candles     = [];
+  let session     = {};
+  let imbalance   = { current: 0, history: [] };
+  let cvdHistory  = [];
 
   let windowHalf = null, windowHalfAuto = null;
   let userZoomY  = false;
@@ -28,13 +28,20 @@ window.FootprintPage = (() => {
   let axisDragging = false, axisDragStartY = 0, axisDragStartH = 0;
 
   let mainCanvas, mainCtx, mainWrap;
-  let cvdCanvas, cvdCtx;
-  let vpCanvas, vpCtx;
+  let cvdCanvas,  cvdCtx;
+  let vpCanvas,   vpCtx;
   let W = 0, H = 0;
   const CVD_H = 80, VP_W = 100, TS_BAR_H = 18, AXIS_W = 64;
 
   let dirty = false;
   const bubbles = [];
+
+  // helper: get total from a plain JSON level object
+  function lvTotal(lv) {
+    return lv.total !== undefined
+      ? lv.total
+      : (lv.bid_vol || 0) + (lv.ask_vol || 0);
+  }
 
   // ─ Init ────────────────────────────────────────────────────
   function init() {
@@ -190,9 +197,9 @@ window.FootprintPage = (() => {
     if (!strip) return;
     strip.addEventListener('mousedown', e => {
       e.preventDefault();
-      axisDragging    = true;
-      axisDragStartY  = e.clientY;
-      axisDragStartH  = windowHalf ?? windowHalfAuto ?? 500;
+      axisDragging   = true;
+      axisDragStartY = e.clientY;
+      axisDragStartH = windowHalf ?? windowHalfAuto ?? 500;
       strip.classList.add('dragging');
     });
     window.addEventListener('mousemove', e => {
@@ -331,11 +338,11 @@ window.FootprintPage = (() => {
 
   function autoFitY() {
     if (!candles.length || !midPrice) return;
-    const vis = candles.slice(-100);
+    const vis    = candles.slice(-100);
     const prices = vis.flatMap(c => [c.high, c.low]).filter(Boolean);
     if (!prices.length) return;
-    const lo = Math.min(...prices);
-    const hi = Math.max(...prices);
+    const lo   = Math.min(...prices);
+    const hi   = Math.max(...prices);
     const half = Math.max((hi - lo) / 2, tickSize ? tickSize * 10 : 1) * 1.1;
     windowHalfAuto = half;
     if (!userZoomY) {
@@ -350,17 +357,17 @@ window.FootprintPage = (() => {
     const pct = Math.abs(val) * 50;
     fill.style.background = val >= 0 ? 'rgba(166,227,161,0.6)' : 'rgba(243,139,168,0.6)';
     if (val >= 0) {
-      fill.style.bottom = '50%'; fill.style.top = 'auto'; fill.style.height = pct + '%';
+      fill.style.bottom = '50%'; fill.style.top  = 'auto'; fill.style.height = pct + '%';
     } else {
-      fill.style.top = '50%'; fill.style.bottom = 'auto'; fill.style.height = pct + '%';
+      fill.style.top    = '50%'; fill.style.bottom = 'auto'; fill.style.height = pct + '%';
     }
   }
 
   function showLargeTradeAlert(msg) {
     const strip = document.getElementById('fp-alert-strip');
     if (!strip) return;
-    const badge = document.createElement('div');
-    const isBid = msg.side === 'B';
+    const badge  = document.createElement('div');
+    const isBid  = msg.side === 'B';
     badge.className = 'lt-badge ' + (isBid ? 'lt-bid' : 'lt-ask');
     const usd = msg.notional >= 1e6
       ? (msg.notional / 1e6).toFixed(1) + 'M'
@@ -406,7 +413,7 @@ window.FootprintPage = (() => {
     const visCols = Math.floor(HEAT_W / colPx);
     const startIdx = Math.max(0, candles.length - visCols);
 
-    // Detect tick size
+    // Detect tick size from level keys
     if (!tickSize && candles.length) {
       const lv = candles[candles.length - 1].levels;
       if (lv) {
@@ -464,7 +471,7 @@ window.FootprintPage = (() => {
       const si = startIdx + col;
       if (si >= candles.length) break;
       const candle = candles[si];
-      const cx = col * colPx;
+      const cx     = col * colPx;
       const levels = candle.levels || {};
       const prices = Object.keys(levels).map(parseFloat).sort((a, b) => a - b);
 
@@ -473,24 +480,25 @@ window.FootprintPage = (() => {
         continue;
       }
 
-      const maxTotal = Math.max(...prices.map(p => levels[p].total), 1);
-      const poc = candle.poc;
+      const maxTotal = Math.max(...prices.map(p => lvTotal(levels[p])), 1);
+      const poc      = candle.poc;
 
       for (const p of prices) {
-        const lv   = levels[p];
-        const y    = py(p);
+        const lv    = levels[p];
+        const y     = py(p);
         if (y < 0 || y > CHART_H) continue;
-        const n    = Math.min(1, lv.total / maxTotal);
-        const d    = lv.delta;
+        const total = lvTotal(lv);
+        const n     = Math.min(1, total / maxTotal);
+        const d     = (lv.delta !== undefined) ? lv.delta : (lv.bid_vol || 0) - (lv.ask_vol || 0);
         const cellW = colPx - 1;
         const cellH = Math.max(2, rowH - 0.5);
 
         let r, g, b, alpha;
         if (d > 0) {
-          r = Math.round(40 + n*126); g = Math.round(150 + n*77); b = Math.round(60 + n*61);
+          r = Math.round(40  + n*126); g = Math.round(150 + n*77); b = Math.round(60 + n*61);
           alpha = 0.18 + n * 0.72;
         } else if (d < 0) {
-          r = Math.round(120 + n*123); g = Math.round(30 + n*45); b = Math.round(50 + n*58);
+          r = Math.round(120 + n*123); g = Math.round(30  + n*45); b = Math.round(50 + n*58);
           alpha = 0.18 + n * 0.72;
         } else {
           r=80; g=80; b=100; alpha=0.15;
@@ -499,13 +507,15 @@ window.FootprintPage = (() => {
         mainCtx.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
         mainCtx.fillRect(cx, y - cellH/2, cellW, cellH);
 
-        if (p === poc) {
+        if (String(p) === String(poc) || p === poc) {
           mainCtx.strokeStyle = 'rgba(229,192,123,0.95)'; mainCtx.lineWidth = 1.5;
           mainCtx.strokeRect(cx, y - cellH/2, cellW, cellH);
         }
 
         if (cfg.showImbalance) {
-          const imb = lv.imbalance;
+          const imb = lv.imbalance !== undefined
+            ? lv.imbalance
+            : (total > 0 ? (lv.bid_vol || 0) / total : 0.5);
           if (imb >= cfg.imbalanceThreshold) {
             mainCtx.strokeStyle = 'rgba(166,227,161,0.9)'; mainCtx.lineWidth = 1;
             mainCtx.beginPath();
@@ -522,10 +532,10 @@ window.FootprintPage = (() => {
         }
 
         if (colPx >= 44 && cellH >= 8) {
-          const bidStr = lv.bid_vol.toFixed(lv.bid_vol < 10 ? 3 : 1);
-          const askStr = lv.ask_vol.toFixed(lv.ask_vol < 10 ? 3 : 1);
+          const bidStr = (lv.bid_vol||0).toFixed((lv.bid_vol||0) < 10 ? 3 : 1);
+          const askStr = (lv.ask_vol||0).toFixed((lv.ask_vol||0) < 10 ? 3 : 1);
           mainCtx.font = '7px Inter,monospace'; mainCtx.fillStyle = 'rgba(205,214,244,0.85)';
-          mainCtx.textAlign = 'left';  mainCtx.fillText(bidStr, cx + 2, y + 3);
+          mainCtx.textAlign = 'left';  mainCtx.fillText(bidStr, cx + 2,        y + 3);
           mainCtx.textAlign = 'right'; mainCtx.fillText(askStr, cx + cellW - 2, y + 3);
           mainCtx.textAlign = 'left';
         }
@@ -535,7 +545,7 @@ window.FootprintPage = (() => {
 
       if (colPx >= 30 && candle.delta !== undefined) {
         const topY = py(candle.high) - 10;
-        const d = candle.delta;
+        const d    = candle.delta;
         mainCtx.font = '8px Inter,monospace';
         mainCtx.fillStyle = d >= 0 ? 'rgba(166,227,161,0.85)' : 'rgba(243,139,168,0.85)';
         mainCtx.textAlign = 'center';
@@ -598,7 +608,6 @@ window.FootprintPage = (() => {
     }
     if (bubbles.length) dirty = true;
 
-    // Volume Profile
     drawVolumeProfile(startIdx, visCols, CHART_H);
   }
 
@@ -625,7 +634,7 @@ window.FootprintPage = (() => {
       if (si >= candles.length) break;
       const lv = candles[si].levels || {};
       for (const [p, l] of Object.entries(lv)) {
-        volMap[p] = (volMap[p] || 0) + l.total;
+        volMap[p] = (volMap[p] || 0) + lvTotal(l);   // ← uses lvTotal()
       }
     }
     const prices = Object.keys(volMap).map(parseFloat).sort((a, b) => a - b);
