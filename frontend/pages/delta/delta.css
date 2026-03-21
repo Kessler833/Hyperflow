@@ -1,0 +1,43 @@
+#delta-wrap {
+  display: flex; flex-direction: column; height: 100%; overflow: hidden;
+}
+#delta-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 12px; background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; flex-shrink: 0; flex-wrap: wrap; min-height: 36px;
+}
+#delta-body {
+  flex: 1; overflow-y: auto; padding: 14px; display: flex;
+  flex-direction: column; gap: 14px;
+}
+.delta-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+}
+.delta-card-title {
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .5px;
+  text-transform: uppercase; display: flex; align-items: center; gap: 8px;
+}
+.delta-card-title .tag { padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
+.tag-bull { background: rgba(166,227,161,.18); color: #a6e3a1; }
+.tag-bear { background: rgba(243,139,168,.18); color: #f38ba8; }
+.tag-none { background: rgba(108,112,134,.18); color: var(--muted); }
+.delta-chart-wrap { padding: 10px; }
+.delta-chart-wrap canvas { width: 100%; display: block; }
+#delta-stats-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
+.d-stat {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;
+}
+.d-stat-label { color: var(--faint); font-size: 11px; margin-bottom: 4px; }
+.d-stat-value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+#lt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+#lt-table th {
+  color: var(--faint); text-align: left; padding: 4px 10px;
+  border-bottom: 1px solid var(--border); font-weight: 400;
+}
+#lt-table td { padding: 3px 10px; }
+.lt-bid-row td:first-child { color: #a6e3a1; }
+.lt-ask-row td:first-child { color: #f38ba8; }
+#imb-chart-wrap { padding: 10px; }
+#imb-chart-wrap canvas { width: 100%; display: block; }

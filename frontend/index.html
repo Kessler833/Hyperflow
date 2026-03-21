@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Hyperflow</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./core/base.css">
+  <link rel="stylesheet" href="./core/components.css">
+  <link rel="stylesheet" href="./pages/footprint/footprint.css">
+  <link rel="stylesheet" href="./pages/delta/delta.css">
+  <link rel="stylesheet" href="./pages/session/session.css">
+</head>
+<body>
+  <nav id="sidebar">
+    <div id="logo"><!-- SVG logo --><span class="logo-text">Hyperflow</span></div>
+    <ul id="nav-links">
+      <li class="nav-item active" data-page="footprint">📊 Footprint</li>
+      <li class="nav-item" data-page="delta">Δ Delta / CVD</li>
+      <li class="nav-item" data-page="session">📈 Session</li>
+    </ul>
+    <button id="sidebar-toggle">◄</button>
+  </nav>
+  <main id="main-content">
+    <div id="page-footprint" class="page active"></div>
+    <div id="page-delta" class="page"></div>
+    <div id="page-session" class="page"></div>
+  </main>
+  <script src="./core/app.js"></script>
+  <script src="./pages/footprint/footprint.js"></script>
+  <script src="./pages/delta/delta.js"></script>
+  <script src="./pages/session/session.js"></script>
+</body>
+</html>

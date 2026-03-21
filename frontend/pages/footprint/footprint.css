@@ -1,0 +1,145 @@
+/* ── FOOTPRINT PAGE ──────────────────────────────────────────── */
+
+#fp-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 12px; background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; flex-shrink: 0; flex-wrap: wrap; min-height: 36px;
+}
+#fp-coin-badge  { color: var(--accent); font-weight: 700; font-size: 13px; }
+#fp-price       { color: var(--text); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+#fp-delta-badge {
+  padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;
+  min-width: 70px; text-align: center; transition: all .2s;
+}
+.delta-pos { background: rgba(166,227,161,.18); color: #a6e3a1; }
+.delta-neg { background: rgba(243,139,168,.18); color: #f38ba8; }
+
+.fp-ctl-group {
+  display: flex; align-items: center; gap: 5px;
+  background: var(--surface); border: 1px solid var(--border2);
+  border-radius: 6px; padding: 3px 8px; font-size: 11px; color: var(--muted);
+}
+.fp-ctl-group label { white-space: nowrap; }
+.fp-input {
+  background: transparent; border: none; color: var(--text);
+  font-size: 12px; font-family: inherit; outline: none; width: 52px;
+  font-variant-numeric: tabular-nums; text-transform: uppercase;
+}
+.fp-input:focus { color: var(--accent); }
+.fp-btn {
+  background: var(--accent); color: var(--bg); border: none;
+  border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700;
+  cursor: pointer; transition: opacity .15s;
+}
+.fp-btn:hover { opacity: .85; }
+.fp-select {
+  background: transparent; border: none; color: var(--text);
+  font-size: 11px; font-family: inherit; outline: none; cursor: pointer;
+}
+.fp-select option { background: var(--surface); }
+
+#fp-status { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.status-dot { width:8px; height:8px; border-radius:50%; background:var(--faint); transition: background .3s; }
+.status-dot.live { background:#a6e3a1; box-shadow: 0 0 6px #a6e3a1; }
+
+/* ── Body layout ─────────────────────────────────────────────── */
+#fp-body {
+  display: flex; flex: 1; overflow: hidden; min-height: 0; flex-direction: column;
+}
+#fp-main-row {
+  display: flex; flex: 1; overflow: hidden; min-height: 0;
+}
+
+/* ── Canvas wrap ─────────────────────────────────────────────── */
+#fp-canvas-wrap {
+  flex: 1; position: relative; overflow: hidden; min-width: 0;
+}
+#fp-canvas { width: 100%; height: 100%; display: block; }
+
+/* Y-axis drag strip */
+#fp-axis-drag {
+  position: absolute; top: 0; right: 0;
+  width: 64px; height: 100%;
+  cursor: ns-resize; z-index: 10;
+  -webkit-app-region: no-drag;
+}
+#fp-zoom-hint {
+  position: absolute; bottom: 24px; right: 4px;
+  width: 60px; text-align: center; font-size: 9px; color: var(--faint);
+  pointer-events: none; opacity: 0; transition: opacity .3s;
+}
+#fp-axis-drag:hover ~ #fp-zoom-hint,
+#fp-axis-drag.dragging ~ #fp-zoom-hint { opacity: 1; }
+
+/* ── Waiting overlay ─────────────────────────────────────────── */
+#fp-waiting {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; background: rgba(10,10,20,.9);
+  color: var(--muted); font-size: 13px; z-index: 20;
+}
+#fp-waiting.hidden { display: none; }
+
+/* ── Info overlay (bottom-left) ──────────────────────────────── */
+#fp-overlay {
+  position: absolute; bottom: 8px; left: 8px;
+  background: rgba(10,10,20,.75); border-radius: 4px;
+  padding: 4px 8px; font-size: 10px; color: var(--muted);
+  pointer-events: none; z-index: 5;
+}
+
+/* ── Large trade alert strip (top of canvas) ─────────────────── */
+#fp-alert-strip {
+  position: absolute; top: 4px; left: 8px;
+  display: flex; gap: 6px; flex-wrap: wrap;
+  pointer-events: none; z-index: 6; max-width: 60%;
+}
+.lt-badge {
+  padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700;
+  animation: lt-fade 6s forwards;
+  white-space: nowrap;
+}
+.lt-bid { background: rgba(166,227,161,.2); color: #a6e3a1; border: 1px solid rgba(166,227,161,.4); }
+.lt-ask { background: rgba(243,139,168,.2); color: #f38ba8; border: 1px solid rgba(243,139,168,.4); }
+@keyframes lt-fade { 0%{opacity:1} 70%{opacity:.8} 100%{opacity:0} }
+
+/* ── CVD sub-panel ───────────────────────────────────────────── */
+#fp-cvd-row {
+  height: 80px; flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  background: var(--bg2);
+}
+#fp-cvd-label {
+  width: 44px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  writing-mode: vertical-lr;
+  font-size: 9px; color: var(--faint); letter-spacing: .5px;
+  border-right: 1px solid var(--border);
+}
+#fp-cvd-canvas { flex: 1; display: block; }
+
+/* ── Volume profile panel (right of main canvas) ─────────────── */
+#fp-vp {
+  width: 100px; flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  position: relative; overflow: hidden;
+}
+#fp-vp-canvas { width: 100%; height: 100%; display: block; }
+#fp-vp-label {
+  position: absolute; top: 4px; left: 0; right: 0;
+  text-align: center; font-size: 9px; color: var(--faint);
+  pointer-events: none;
+}
+
+/* ── Imbalance bar (far right) ───────────────────────────────── */
+#fp-imb-bar {
+  width: 12px; flex-shrink: 0;
+  background: var(--bg2); border-left: 1px solid var(--border);
+  position: relative; overflow: hidden;
+}
+#fp-imb-fill {
+  position: absolute; bottom: 50%; left: 0; right: 0;
+  transition: height .2s, top .2s;
+}
