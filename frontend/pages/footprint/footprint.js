@@ -5,7 +5,7 @@
 
 window.FP = (() => {
 
-  const fmtVol = v => v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(1);
+  const fmtVol  = v => v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(1);
   const fmtTime = ms => {
     const d = new Date(ms);
     return d.getHours().toString().padStart(2,'0') + ':' +
@@ -18,7 +18,6 @@ window.FP = (() => {
     return lv.total !== undefined ? lv.total : (lv.bid_vol || 0) + (lv.ask_vol || 0);
   }
 
-  // Cluster levels clamped to candle range
   function clusterLevels(levels, candleHigh, candleLow, tickSize, n) {
     if (n <= 1) return levels;
     const ts  = tickSize || 1;
@@ -37,23 +36,18 @@ window.FP = (() => {
     return out;
   }
 
-  // ─ Main entry point ──────────────────────────────────────────
+  // ─ Main entry ────────────────────────────────────────────────
   function render(c) {
-    const { mainCtx: ctx, CHART_H, HEAT_W } = c;
-
     drawGrid(c);
     drawSessionLevels(c);
-
-    // Per-candle pass
     for (let col = 0; col < c.visCols; col++) {
       const si = c.startIdx + col;
       if (si >= c.candles.length) break;
       const candle = c.candles[si];
       const cx     = col * c.colPx;
-      drawCandle(ctx, candle, cx, c.colPx, c.CHART_H, c.py);
-      drawFootprintCells(c, candle, cx, col, si);
+      drawCandle(c.mainCtx, candle, cx, c.colPx, c.CHART_H, c.py);
+      drawFootprintCells(c, candle, cx);
     }
-
     drawPriceLine(c);
     drawTimestampBar(c);
     drawPriceAxis(c);
@@ -71,7 +65,7 @@ window.FP = (() => {
     }
   }
 
-  // ─ Session levels (VWAP, POC, VAH, VAL) ─────────────────────
+  // ─ Session levels ────────────────────────────────────────────
   function drawSessionLevels({ mainCtx: ctx, CHART_H, HEAT_W, session, cfg, py }) {
     if (cfg.showVWAP && session.vwap) {
       const vy = py(session.vwap);
@@ -103,7 +97,7 @@ window.FP = (() => {
     lvl(session.val, 'VAL', 'rgba(137,220,235,0.7)');
   }
 
-  // ─ OHLC candle — no fill, saturated borders + wicks ─────────
+  // ─ OHLC candle — no fill, saturated border + wicks ──────────
   function drawCandle(ctx, c, cx, colPx, CHART_H, py) {
     if (!c.open) return;
     const isBull = c.close >= c.open;
@@ -120,98 +114,92 @@ window.FP = (() => {
     ctx.lineWidth   = 2;
     ctx.shadowColor = isBull ? 'rgba(0,255,80,0.35)' : 'rgba(255,30,30,0.35)';
     ctx.shadowBlur  = 4;
-
+    // Wicks
     ctx.beginPath(); ctx.moveTo(x, wickT); ctx.lineTo(x, bodyT); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x, bodyB); ctx.lineTo(x, wickB); ctx.stroke();
-    // No fill — border only
-    ctx.shadowBlur = 4;
+    // Body — border only, no fill
     ctx.strokeRect(cx + 2, bodyT, colPx - 4, bodyH);
     ctx.restore();
   }
 
   // ─ Footprint cells ───────────────────────────────────────────
-  function drawFootprintCells(c, candle, cx, col, si) {
+  function drawFootprintCells(c, candle, cx) {
     const { mainCtx: ctx, colPx, cfg, tickSize, rowH, py, CHART_H } = c;
 
     const levels = clusterLevels(
       candle.levels || {},
       candle.high || c.midPrice,
       candle.low  || c.midPrice,
-      tickSize,
-      cfg.cluster
+      tickSize, cfg.cluster
     );
     const keys = Object.keys(levels).sort((a, b) => parseFloat(a) - parseFloat(b));
     if (!keys.length) return;
 
-    // Per-candle maxima for independent scaling
+    // Per-candle maxima — always live, always relative to this candle
     const maxTotal = Math.max(...keys.map(k => lvTotal(levels[k])), 1);
     const maxBid   = Math.max(...keys.map(k => levels[k].bid_vol || 0), 1);
     const maxAsk   = Math.max(...keys.map(k => levels[k].ask_vol || 0), 1);
-    const pocKey   = candle.poc;
 
     const cellW = colPx - 2;
     const halfW = Math.floor(cellW / 2);
-    const mid   = cx + 1 + halfW;  // center divider x
+    const mid   = cx + 1 + halfW;
 
-    // ── Build POC zone bands ──────────────────────────────────
-    // Find consecutive price runs at each tier threshold and merge into zones
-    // so borders draw as one continuous rectangle, not per-cell
-    const tierRanges = buildTierRanges(keys, levels, maxTotal, pocKey, tickSize, cfg.cluster, py, rowH);
-
-    // ── Draw cells ───────────────────────────────────────────
+    // ── Draw cells first ─────────────────────────────────────
     for (const k of keys) {
       const lv     = levels[k];
       const price  = parseFloat(k);
       const y      = py(price);
       if (y < 0 || y > CHART_H) continue;
 
-      const total    = lvTotal(lv);
       const bidVol   = lv.bid_vol || 0;
       const askVol   = lv.ask_vol || 0;
-      const ratio    = total / maxTotal;
-      const bidRatio = bidVol / maxBid;
-      const askRatio = askVol / maxAsk;
+      const bidRatio = bidVol / maxBid;   // relative to candle max bid
+      const askRatio = askVol / maxAsk;   // relative to candle max ask
       const cellH    = Math.max(2, rowH - 1);
-      const alpha    = 0.25 + ratio * 0.75;
 
-      // Ask (buyers) — green, grows LEFT from center
+      // Ask (buyers) — green, LEFT from center, full opacity
       const askBarW = Math.max(1, askRatio * halfW);
-      ctx.fillStyle = `rgba(50,255,100,${alpha.toFixed(2)})`;
+      ctx.fillStyle = 'rgba(50,255,100,1)';
       ctx.fillRect(mid - askBarW, y - cellH / 2, askBarW, cellH);
 
-      // Bid (sellers) — red, grows RIGHT from center
+      // Bid (sellers) — red, RIGHT from center, full opacity
       const bidBarW = Math.max(1, bidRatio * halfW);
-      ctx.fillStyle = `rgba(255,50,50,${alpha.toFixed(2)})`;
+      ctx.fillStyle = 'rgba(255,50,50,1)';
       ctx.fillRect(mid, y - cellH / 2, bidBarW, cellH);
 
       // Center divider
-      ctx.fillStyle = 'rgba(120,120,150,0.5)';
+      ctx.fillStyle = 'rgba(120,120,150,0.6)';
       ctx.fillRect(mid, y - cellH / 2, 1, cellH);
 
-      // Side POC markers (brightest bar on each side)
-      if (askRatio >= 0.98) {
+      // Side POC markers — glowing edge tick on the max level of each side
+      if (askRatio >= 0.99) {
         ctx.save();
         ctx.strokeStyle = 'rgba(50,255,100,1)';
         ctx.lineWidth   = 2;
-        ctx.shadowColor = 'rgba(50,255,100,0.6)';
-        ctx.shadowBlur  = 4;
-        ctx.beginPath(); ctx.moveTo(cx + 1, y - cellH / 2); ctx.lineTo(cx + 1, y + cellH / 2);
+        ctx.shadowColor = 'rgba(50,255,100,0.8)';
+        ctx.shadowBlur  = 5;
+        ctx.beginPath();
+        ctx.moveTo(cx + 1, y - cellH / 2);
+        ctx.lineTo(cx + 1, y + cellH / 2);
         ctx.stroke(); ctx.restore();
       }
-      if (bidRatio >= 0.98) {
+      if (bidRatio >= 0.99) {
         ctx.save();
         ctx.strokeStyle = 'rgba(255,50,50,1)';
         ctx.lineWidth   = 2;
-        ctx.shadowColor = 'rgba(255,50,50,0.6)';
-        ctx.shadowBlur  = 4;
-        ctx.beginPath(); ctx.moveTo(cx + cellW, y - cellH / 2); ctx.lineTo(cx + cellW, y + cellH / 2);
+        ctx.shadowColor = 'rgba(255,50,50,0.8)';
+        ctx.shadowBlur  = 5;
+        ctx.beginPath();
+        ctx.moveTo(cx + cellW, y - cellH / 2);
+        ctx.lineTo(cx + cellW, y + cellH / 2);
         ctx.stroke(); ctx.restore();
       }
 
-      // Imbalance triangle on right edge
+      // Imbalance triangle
       if (cfg.showImbalance) {
-        const imb = total > 0 ? askVol / total : 0.5;
-        const thr = cfg.imbalanceThreshold;
+        const total = lvTotal(lv);
+        const imb   = total > 0 ? askVol / total : 0.5;
+        const thr   = cfg.imbalanceThreshold;
         if (imb >= thr || imb <= 1 - thr) {
           ctx.fillStyle = imb >= thr ? 'rgba(50,255,100,1)' : 'rgba(255,50,50,1)';
           ctx.beginPath();
@@ -222,21 +210,27 @@ window.FP = (() => {
         }
       }
 
-      // Numbers on outer edges — ask on far left, bid on far right
+      // Numbers on outer edges
       if (colPx >= 44 && cellH >= 11) {
         const fs = Math.min(9, cellH - 2);
         ctx.font      = `${fs}px Inter,monospace`;
         ctx.fillStyle = 'rgba(220,220,240,0.95)';
         ctx.textAlign = 'left';
-        ctx.fillText(fmtVol(askVol), cx + 2, y + fs / 2 - 1);    // ask: left edge
+        ctx.fillText(fmtVol(askVol), cx + 2,          y + fs / 2 - 1);
         ctx.textAlign = 'right';
-        ctx.fillText(fmtVol(bidVol), cx + cellW - 1, y + fs / 2 - 1); // bid: right edge
+        ctx.fillText(fmtVol(bidVol), cx + cellW - 1,  y + fs / 2 - 1);
         ctx.textAlign = 'left';
       }
     }
 
-    // ── Draw tier zone borders (merged continuous rectangles) ──
-    drawTierBorders(ctx, tierRanges, cx, cellW);
+    // ── Draw POC zones as connected rectangles ────────────────
+    // Use vah/val (70%) and vah50/val50 (50%) from backend
+    // which are already computed via value_area() expansion from POC
+    drawZoneBorder(ctx, candle.val50, candle.vah50, candle.poc,
+                   cx, cellW, rowH, py, CHART_H, '50');
+    // Draw 70% zone on top (overwrites 50% border where they overlap)
+    drawZoneBorder(ctx, candle.val,   candle.vah,   candle.poc,
+                   cx, cellW, rowH, py, CHART_H, '70');
 
     // Delta label below candle
     if (colPx >= 28 && candle.delta !== undefined) {
@@ -253,77 +247,52 @@ window.FP = (() => {
     }
   }
 
-  // Build merged vertical zones for tier borders
-  // Returns array of { tier: 'poc'|'high'|'mid', yTop, yBot }
-  function buildTierRanges(keys, levels, maxTotal, pocKey, tickSize, cluster, py, rowH) {
-    const zones = [];
-    let current = null;
+  // ─ Zone border — one connected rect from val to vah ─────────
+  // POC level always gets gold override even if inside a wider zone
+  function drawZoneBorder(ctx, val, vah, poc, cx, cellW, rowH, py, CHART_H, tier) {
+    if (!val || !vah) return;
 
-    for (const k of keys) {
-      const lv    = levels[k];
-      const price = parseFloat(k);
-      const ratio = lvTotal(lv) / maxTotal;
-      const isPOC = pocKey !== undefined && pocKey !== null && Math.abs(price - pocKey) < 1e-6;
+    const yTop = py(vah) - rowH / 2;
+    const yBot = py(val) + rowH / 2;
+    if (yTop > CHART_H || yBot < 0) return;
 
-      // Determine tier for this level
-      let tier = null;
-      if (isPOC)         tier = 'poc';
-      else if (ratio >= 0.75) tier = 'high';
-      else if (ratio >= 0.50) tier = 'mid';
+    const h = Math.max(2, yBot - yTop);
 
-      if (!tier) { current = null; continue; }
-
-      const y     = py(price);
-      const cellH = Math.max(2, rowH - 1);
-      const yTop  = y - cellH / 2;
-      const yBot  = y + cellH / 2;
-
-      if (current && current.tier === tier && yTop <= current.yBot + 2) {
-        // Extend existing zone — but if POC is inside a high/mid zone, promote it
-        current.yBot = yBot;
-        if (isPOC) current.hasPOC = true;
-      } else {
-        if (current) zones.push(current);
-        current = { tier, yTop, yBot, hasPOC: isPOC };
-      }
+    ctx.save();
+    if (tier === '70') {
+      // Silver/white border for 70% zone
+      ctx.strokeStyle = 'rgba(220,220,220,0.9)';
+      ctx.lineWidth   = 1.5;
+      ctx.shadowColor = 'rgba(220,220,220,0.3)';
+      ctx.shadowBlur  = 3;
+    } else {
+      // Blue border for 50% zone
+      ctx.strokeStyle = 'rgba(100,160,255,0.7)';
+      ctx.lineWidth   = 1;
+      ctx.shadowBlur  = 0;
     }
-    if (current) zones.push(current);
-    return zones;
-  }
+    ctx.strokeRect(cx + 1, yTop, cellW, h);
+    ctx.restore();
 
-  function drawTierBorders(ctx, zones, cx, cellW) {
-    for (const z of zones) {
-      const h = z.yBot - z.yTop;
-
-      if (z.tier === 'poc' || z.hasPOC) {
-        // Gold glow — POC always visible even inside a merged zone
+    // POC level — gold override drawn on top, always visible
+    if (poc !== null && poc !== undefined) {
+      const pocY  = py(poc);
+      const pocH  = Math.max(2, rowH - 1);
+      const pocT  = pocY - pocH / 2;
+      if (pocT >= 0 && pocT <= CHART_H) {
         ctx.save();
         ctx.strokeStyle = 'rgba(229,192,123,1)';
         ctx.lineWidth   = 2;
         ctx.shadowColor = 'rgba(229,192,123,0.8)';
         ctx.shadowBlur  = 6;
-        ctx.strokeRect(cx + 1, z.yTop, cellW, h);
-        ctx.restore();
-      } else if (z.tier === 'high') {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(220,220,220,0.85)';
-        ctx.lineWidth   = 1.5;
-        ctx.shadowColor = 'rgba(220,220,220,0.3)';
-        ctx.shadowBlur  = 3;
-        ctx.strokeRect(cx + 1, z.yTop, cellW, h);
-        ctx.restore();
-      } else if (z.tier === 'mid') {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(100,160,255,0.6)';
-        ctx.lineWidth   = 1;
-        ctx.strokeRect(cx + 1, z.yTop, cellW, h);
+        ctx.strokeRect(cx + 1, pocT, cellW, pocH);
         ctx.restore();
       }
     }
   }
 
   // ─ Price line ────────────────────────────────────────────────
-  function drawPriceLine({ mainCtx: ctx, HEAT_W, AXIS_W, H, TS_BAR_H, midPrice, windowHalf, py }) {
+  function drawPriceLine({ mainCtx: ctx, HEAT_W, AXIS_W, CHART_H, midPrice, py }) {
     const midY = py(midPrice);
     ctx.strokeStyle = 'rgba(122,162,247,0.95)'; ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 3]);
@@ -353,7 +322,7 @@ window.FP = (() => {
   }
 
   // ─ Price axis ────────────────────────────────────────────────
-  function drawPriceAxis({ mainCtx: ctx, HEAT_W, AXIS_W, H, CHART_H, TS_BAR_H, midPrice, windowHalf, py }) {
+  function drawPriceAxis({ mainCtx: ctx, HEAT_W, AXIS_W, H, CHART_H, midPrice, windowHalf, py }) {
     ctx.fillStyle = 'rgba(10,10,20,0.92)';
     ctx.fillRect(HEAT_W, 0, AXIS_W, H);
     ctx.beginPath(); ctx.strokeStyle = 'rgba(40,40,70,0.9)'; ctx.lineWidth = 1;
@@ -387,7 +356,8 @@ window.FP = (() => {
   }
 
   // ─ Volume profile ────────────────────────────────────────────
-  function drawVolumeProfile({ vpCtx, vpCanvas, VP_W, candles, startIdx, visCols, midPrice, windowHalf, tickSize, cfg, session, py_vp }) {
+  function drawVolumeProfile({ vpCtx, vpCanvas, VP_W, candles, startIdx, visCols,
+                                midPrice, windowHalf, tickSize, cfg, py_vp }) {
     if (!vpCtx || !midPrice || !windowHalf) return;
     const vH = vpCanvas.height;
     vpCtx.clearRect(0, 0, VP_W, vH);
@@ -396,7 +366,8 @@ window.FP = (() => {
       const si = startIdx + col;
       if (si >= candles.length) break;
       const can = candles[si];
-      const lvs = clusterLevels(can.levels || {}, can.high || midPrice, can.low || midPrice, tickSize, cfg.cluster);
+      const lvs = clusterLevels(can.levels || {}, can.high || midPrice,
+                                 can.low || midPrice, tickSize, cfg.cluster);
       for (const [k, l] of Object.entries(lvs)) {
         volMap[k] = (volMap[k] || 0) + lvTotal(l);
       }
@@ -442,7 +413,6 @@ window.FP = (() => {
       gr.addColorStop(0, 'rgba(255,50,50,0.02)');  gr.addColorStop(1, 'rgba(255,50,50,0.3)');
     }
     ctx.fillStyle = gr; ctx.fill();
-
     ctx.beginPath();
     data.forEach((v, i) => {
       const x = i * xStep, y = cH - ((v - min) / range) * (cH - 4) - 2;
@@ -450,16 +420,16 @@ window.FP = (() => {
     });
     ctx.strokeStyle = lv >= 0 ? 'rgba(50,255,100,0.9)' : 'rgba(255,50,50,0.9)';
     ctx.lineWidth = 1.5; ctx.stroke();
-
     if (min < 0 && max > 0) {
       const zy = cH - ((0 - min) / range) * (cH - 4) - 2;
       ctx.strokeStyle = 'rgba(108,112,134,0.4)'; ctx.lineWidth = 1;
       ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.moveTo(0, zy); ctx.lineTo(cW, zy); ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(0, zy); ctx.lineTo(cW, zy);
+      ctx.stroke(); ctx.setLineDash([]);
     }
     ctx.font = '9px Inter,monospace'; ctx.fillStyle = 'rgba(108,112,134,0.9)';
-    ctx.textAlign = 'right'; ctx.fillText(lv.toFixed(3), cW - 4, 10); ctx.textAlign = 'left';
+    ctx.textAlign = 'right'; ctx.fillText(lv.toFixed(3), cW - 4, 10);
+    ctx.textAlign = 'left';
   }
 
   return { render, drawCVD };

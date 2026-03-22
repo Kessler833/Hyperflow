@@ -16,7 +16,12 @@ window.FootprintPage = (() => {
     maxBubble: 18,
   };
 
-  let candles    = [];
+  // Per-interval candle cache — survives TF switches
+  let _candleCache    = {};   // { 15: [...], 60: [...], 300: [...], ... }
+  let candles         = [];   // always points to _candleCache[_activeInterval]
+  let _activeCoin     = cfg.coin;
+  let _activeInterval = cfg.interval;
+
   let session    = {};
   let cvdHistory = [];
   let imbalance  = { current: 0, history: [] };
@@ -41,6 +46,21 @@ window.FootprintPage = (() => {
 
   let dirty = false;
   const bubbles = [];
+
+  // ─ Cache helpers ─────────────────────────────────────────────
+  function _getCache(iv) {
+    if (!_candleCache[iv]) _candleCache[iv] = [];
+    return _candleCache[iv];
+  }
+
+  function _mergeIntoCache(iv, incoming) {
+    if (!incoming || !incoming.length) return;
+    const cache = _getCache(iv);
+    const map   = {};
+    for (const c of cache)    map[c.open_ts] = c;
+    for (const c of incoming) map[c.open_ts] = c;
+    _candleCache[iv] = Object.values(map).sort((a, b) => a.open_ts - b.open_ts);
+  }
 
   // ─ Init ──────────────────────────────────────────────────────
   function init() {
@@ -153,6 +173,7 @@ window.FootprintPage = (() => {
     BackendWS.on('large_trade',      onLargeTrade);
     BackendWS.on('coin_changed',     msg => {
       setEl('fp-coin-badge', msg.coin + '-PERP');
+      _activeCoin = msg.coin;
       resetState();
     });
   }
@@ -172,9 +193,25 @@ window.FootprintPage = (() => {
     coinIn.addEventListener('keydown', e => { if (e.key === 'Enter') applyCoin(); });
 
     document.getElementById('fp-interval').addEventListener('change', e => {
-      cfg.interval = parseInt(e.target.value);
-      localStorage.setItem('fp_interval', cfg.interval);
-      BackendWS.send({ type: 'set_interval', seconds: cfg.interval });
+      const newIv = parseInt(e.target.value);
+      cfg.interval    = newIv;
+      _activeInterval = newIv;
+      localStorage.setItem('fp_interval', newIv);
+
+      // Switch candles pointer immediately from local cache if we have it
+      candles = _getCache(newIv);
+      if (candles.length) {
+        const last = candles[candles.length - 1];
+        midPrice = last.close || last.open || midPrice;
+        tickSize = null; // redetect for new TF
+        autoFitY();
+        setEl('ov-candles', candles.length);
+        setEl('ov-tick', '—');
+        dirty = true;
+      }
+
+      // Ask backend for its snapshot too (may have more candles than our cache)
+      BackendWS.send({ type: 'set_interval', seconds: newIv });
     });
 
     document.getElementById('fp-cluster').addEventListener('input', e => {
@@ -280,29 +317,65 @@ window.FootprintPage = (() => {
 
   // ─ WS handlers ───────────────────────────────────────────────
   function onFootprintUpdate(msg) {
-    candles = msg.candles || [];
-    if (candles.length) {
-      midPrice = candles[candles.length - 1].close || candles[candles.length - 1].open;
-      autoFitY();
+    const incomingIv   = msg.interval ?? _activeInterval;
+    const incomingCoin = msg.coin     ?? _activeCoin;
+    const coinChanged  = incomingCoin !== _activeCoin;
+
+    if (coinChanged) {
+      // Full wipe — new market
+      _candleCache   = {};
+      _activeCoin    = incomingCoin;
+      midPrice       = null;
+      tickSize       = null;
+      windowHalf     = null;
+      windowHalfAuto = null;
+      userZoomY      = false;
+      xZoomMul       = 1.0;
+      bubbles.length = 0;
+      setEl('fp-price', '—');
+      setEl('ov-tick',  '—');
+      setEl('ov-range', '—');
     }
-    setEl('ov-candles', candles.length);
-    dirty = true;
+
+    // Merge backend snapshot into local cache (never blindly replace)
+    _mergeIntoCache(incomingIv, msg.candles || []);
+
+    // If this update is for the active interval, point candles at it
+    if (incomingIv === _activeInterval) {
+      candles = _getCache(_activeInterval);
+      if (candles.length) {
+        const last = candles[candles.length - 1];
+        midPrice = last.close || last.open || midPrice;
+        autoFitY();
+      }
+      setEl('ov-candles', candles.length);
+      dirty = true;
+    }
   }
 
   function onCandleTick(msg) {
-    const c = msg.candle; if (!c) return;
-    if (!candles.length) {
-      candles.push(c);
+    const iv = msg.interval ?? _activeInterval;
+    const c  = msg.candle; if (!c) return;
+
+    // Always write into the correct interval cache
+    const cache = _getCache(iv);
+    if (!cache.length) {
+      cache.push(c);
     } else {
-      const last = candles[candles.length - 1];
+      const last = cache[cache.length - 1];
       if (last.open_ts === c.open_ts) {
-        candles[candles.length - 1] = c;
+        cache[cache.length - 1] = c;
       } else {
-        candles[candles.length - 1].closed = true;
-        candles.push(c);
-        if (candles.length > 500) candles.shift();
+        cache[cache.length - 1].closed = true;
+        cache.push(c);
+        if (cache.length > 500) cache.shift();
       }
     }
+
+    // Only re-render if this tick is for the active interval
+    if (iv !== _activeInterval) return;
+
+    candles  = cache;
     midPrice = c.close || c.open;
     if (!userZoomY) autoFitY();
     updatePriceDisplay(c);
@@ -375,11 +448,13 @@ window.FootprintPage = (() => {
   }
 
   function resetState() {
-    candles = []; session = {}; cvdHistory = [];
-    imbalance = { current: 0, history: [] };
-    midPrice = null; tickSize = null;
-    windowHalf = null; windowHalfAuto = null; userZoomY = false;
-    xZoomMul = 1.0; bubbles.length = 0;
+    _candleCache   = {};
+    candles        = [];
+    session        = {}; cvdHistory = [];
+    imbalance      = { current: 0, history: [] };
+    midPrice       = null; tickSize = null;
+    windowHalf     = null; windowHalfAuto = null; userZoomY = false;
+    xZoomMul       = 1.0; bubbles.length = 0;
     setEl('fp-price','—'); setEl('ov-tick','—'); setEl('ov-range','—'); setEl('ov-candles','0');
   }
 
@@ -402,7 +477,7 @@ window.FootprintPage = (() => {
     const visCols  = Math.floor(HEAT_W / colPx);
     const startIdx = Math.max(0, candles.length - visCols);
 
-    // Auto-detect tick size once
+    // Auto-detect tick size once per dataset
     if (!tickSize && candles.length) {
       const lvObj = candles[candles.length - 1].levels;
       if (lvObj) {
@@ -417,7 +492,6 @@ window.FootprintPage = (() => {
     const effectiveTick = (tickSize || 1) * cfg.cluster;
     const rowH          = Math.max(2, (CHART_H / (windowHalf * 2)) * effectiveTick);
 
-    // Pass shared context to FP renderer
     const ctx = {
       mainCtx, W, H, CHART_H, HEAT_W, AXIS_W, TS_BAR_H,
       colPx, visCols, startIdx,
@@ -429,13 +503,12 @@ window.FootprintPage = (() => {
 
     FP.render(ctx);
 
-    // Fade bubbles
     if (bubbles.length) dirty = true;
   }
 
   // ─ Lifecycle ─────────────────────────────────────────────────
-  function onShow()         { resize(); dirty = true; }
-  function onConnected()    {
+  function onShow()      { resize(); dirty = true; }
+  function onConnected() {
     document.getElementById('fp-dot')?.classList.add('live');
     setEl('fp-status-text', 'Live');
     document.getElementById('fp-waiting')?.classList.add('hidden');
