@@ -12,9 +12,10 @@ Messages → frontend:
   coin_changed       on coin switch
 
 Messages ← frontend:
-  set_coin      { coin }
-  set_interval  { seconds: 15|60|300|900|1800|3600 }
-  get_snapshot  {}
+  set_coin          { coin }
+  set_interval      { seconds: 15|60|300|900|1800|3600 }
+  get_snapshot      {}
+  get_all_snapshots {}
 """
 from __future__ import annotations
 
@@ -49,7 +50,6 @@ current_coin:  str  = "BTC"
 coin_lock      = asyncio.Lock()
 interval_secs: int  = 60
 
-# ONE buffer — all timeframes are views over it
 trade_buf:   TradeBuffer      = TradeBuffer(coin="BTC")
 cvd_tracker: CVDTracker       = CVDTracker()
 imb_tracker: ImbalanceTracker = ImbalanceTracker()
@@ -79,7 +79,7 @@ def _detect_tick(bids: list):
         diff = abs(float(bids[0]['px']) - float(bids[1]['px']))
         if diff > 0:
             _tick_size = diff
-            trade_buf.tick_size  = diff
+            trade_buf.tick_size   = diff
             session_mgr.tick_size = diff
 
 
@@ -101,6 +101,18 @@ def _snapshot(interval: int) -> dict:
     }
 
 
+async def _send_all_snapshots(ws: WebSocket):
+    """Send every supported interval to one client."""
+    for iv in SUPPORTED_INTERVALS:
+        await send_to(ws, _snapshot(iv))
+
+
+async def _broadcast_all_snapshots():
+    """Broadcast all interval snapshots to every connected client."""
+    for iv in SUPPORTED_INTERVALS:
+        await broadcast(_snapshot(iv))
+
+
 # ─ Feed ───────────────────────────────────────────────────────────────────
 async def hl_feed():
     global current_coin
@@ -111,14 +123,14 @@ async def hl_feed():
         try:
             async with websockets.connect(HL_WS_URL, ping_interval=20) as ws:
                 for sub in [
-                    {'type': 'trades',        'coin': coin},
-                    {'type': 'l2Book',        'coin': coin, 'nSigFigs': 5},
-                    {'type': 'activeAssetCtx','coin': coin},
+                    {'type': 'trades',         'coin': coin},
+                    {'type': 'l2Book',         'coin': coin, 'nSigFigs': 5},
+                    {'type': 'activeAssetCtx', 'coin': coin},
                 ]:
                     await ws.send(json.dumps({'method': 'subscribe', 'subscription': sub}))
                 log.info(f"[feed] Subscribed for {coin}")
 
-                await broadcast(_snapshot(interval_secs))
+                first_batch = True
 
                 while True:
                     if current_coin != coin: break
@@ -138,12 +150,11 @@ async def hl_feed():
                             side  = t.get('side', 'B')
                             ts    = t.get('time', time.time() * 1000) / 1000.0
 
-                            # Single buffer — feeds all TFs
                             trade_buf.add(price, qty, side, ts)
                             cvd_tracker.add_trade(qty, side, price)
                             session_mgr.add_trade(price, qty, side)
 
-                            # Build current candle for active interval only
+                            # Active interval: real-time per-trade tick
                             snap    = trade_buf.build(interval_secs, max_candles=1)
                             current = snap[-1] if snap else None
                             if current:
@@ -164,6 +175,29 @@ async def hl_feed():
                                 })
 
                         if trades:
+                            # On very first batch, warm all caches now that
+                            # the buffer actually has data.
+                            if first_batch:
+                                first_batch = False
+                                log.info("[feed] First trades — warming all TF caches")
+                                await _broadcast_all_snapshots()
+
+                            # KEY FIX: push current candle for every non-active
+                            # interval so their caches stay live. Without this,
+                            # switching timeframes shows stale/empty data.
+                            for iv in SUPPORTED_INTERVALS:
+                                if iv == interval_secs:
+                                    continue  # already sent per-trade above
+                                snap = trade_buf.build(iv, max_candles=1)
+                                cur  = snap[-1] if snap else None
+                                if cur:
+                                    await broadcast({
+                                        'type':     'candle_tick',
+                                        'coin':     coin,
+                                        'interval': iv,
+                                        'candle':   cur,
+                                    })
+
                             await broadcast({'type': 'cvd_update', 'coin': coin,
                                              **cvd_tracker.snapshot(n=300)})
                             await broadcast({'type': 'session_update', 'coin': coin,
@@ -218,11 +252,11 @@ app.add_middleware(CORSMiddleware, allow_origins=['*'],
 @app.get('/health')
 async def health():
     return {
-        'status':       'ok',
-        'coin':         current_coin,
-        'interval':     interval_secs,
+        'status':        'ok',
+        'coin':          current_coin,
+        'interval':      interval_secs,
         'trades_stored': trade_buf.trade_count,
-        'latest_price': trade_buf.latest_price,
+        'latest_price':  trade_buf.latest_price,
     }
 
 
@@ -235,7 +269,7 @@ async def frontend_ws(ws: WebSocket):
     log.info(f'[ws] Client connected ({len(clients)} total)')
 
     try:
-        await send_to(ws, _snapshot(interval_secs))
+        await _send_all_snapshots(ws)
         await send_to(ws, {'type': 'cvd_update', 'coin': current_coin,
                            **cvd_tracker.snapshot(n=300)})
         await send_to(ws, {'type': 'session_update', 'coin': current_coin,
@@ -253,23 +287,34 @@ async def frontend_ws(ws: WebSocket):
 
             if t == 'set_coin':
                 new_coin = data.get('coin', 'BTC').upper().strip()
-                async with coin_lock:
-                    current_coin = new_coin
-                _reset(new_coin)
-                log.info(f'[ws] Coin → {new_coin}')
-                await broadcast({'type': 'coin_changed', 'coin': new_coin})
+                if new_coin == current_coin:
+                    # Same coin — just re-warm this client, don't reset anything
+                    log.info(f'[ws] set_coin {new_coin} (same coin — re-warming)')
+                    await _send_all_snapshots(ws)
+                else:
+                    async with coin_lock:
+                        current_coin = new_coin
+                    _reset(new_coin)
+                    log.info(f'[ws] Coin → {new_coin}')
+                    await broadcast({'type': 'coin_changed', 'coin': new_coin})
+                    # Don't broadcast snapshots yet — buffer is empty after reset.
+                    # Feed loop will warm caches on first trade batch.
 
             elif t == 'set_interval':
                 new_iv = int(data.get('seconds', 60))
                 if new_iv in SUPPORTED_INTERVALS:
                     interval_secs = new_iv
-                    log.info(f'[ws] Interval → {new_iv}s  '
-                             f'(recomputing from {trade_buf.trade_count} trades)')
-                    # Recompute from raw buffer — instant, no history loss
-                    await broadcast(_snapshot(new_iv))
+                    log.info(f'[ws] Interval → {new_iv}s '
+                             f'({trade_buf.trade_count} trades in buffer)')
+                    # Broadcast ALL intervals so every cache is topped up.
+                    await _broadcast_all_snapshots()
 
             elif t == 'get_snapshot':
                 await send_to(ws, _snapshot(interval_secs))
+
+            elif t == 'get_all_snapshots':
+                log.info('[ws] Client requested full snapshot refresh')
+                await _send_all_snapshots(ws)
 
     except WebSocketDisconnect:
         clients.discard(ws)

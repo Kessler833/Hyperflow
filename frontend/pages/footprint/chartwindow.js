@@ -16,8 +16,9 @@ window.FootprintPage = (() => {
     maxBubble: 18,
   };
 
-  // Per-interval candle cache — survives TF switches
-  let _candleCache    = {};   // { 15: [...], 60: [...], 300: [...], ... }
+  // Per-interval candle cache — survives TF switches and reconnects.
+  // Keyed by interval seconds: { 15: [...], 60: [...], 300: [...], ... }
+  let _candleCache    = {};
   let candles         = [];   // always points to _candleCache[_activeInterval]
   let _activeCoin     = cfg.coin;
   let _activeInterval = cfg.interval;
@@ -53,13 +54,18 @@ window.FootprintPage = (() => {
     return _candleCache[iv];
   }
 
+  // KEY FIX: mutate the existing array in place instead of replacing it.
+  // Replacing with a new array breaks any live references (like `candles`)
+  // that still point to the old array — they'd silently go stale.
   function _mergeIntoCache(iv, incoming) {
     if (!incoming || !incoming.length) return;
     const cache = _getCache(iv);
     const map   = {};
     for (const c of cache)    map[c.open_ts] = c;
     for (const c of incoming) map[c.open_ts] = c;
-    _candleCache[iv] = Object.values(map).sort((a, b) => a.open_ts - b.open_ts);
+    const sorted = Object.values(map).sort((a, b) => a.open_ts - b.open_ts);
+    cache.length = 0;
+    for (const c of sorted) cache.push(c);
   }
 
   // ─ Init ──────────────────────────────────────────────────────
@@ -198,19 +204,21 @@ window.FootprintPage = (() => {
       _activeInterval = newIv;
       localStorage.setItem('fp_interval', newIv);
 
-      // Switch candles pointer immediately from local cache if we have it
+      // Point candles at the new interval's cache immediately.
+      // Because _mergeIntoCache mutates in place, this reference stays
+      // valid and will auto-update as new ticks arrive.
       candles = _getCache(newIv);
-      if (candles.length) {
-        const last = candles[candles.length - 1];
-        midPrice = last.close || last.open || midPrice;
-        tickSize = null; // redetect for new TF
-        autoFitY();
-        setEl('ov-candles', candles.length);
-        setEl('ov-tick', '—');
-        dirty = true;
-      }
 
-      // Ask backend for its snapshot too (may have more candles than our cache)
+      midPrice = candles.length
+        ? (candles[candles.length - 1].close || candles[candles.length - 1].open || midPrice)
+        : midPrice;
+      tickSize = null; // redetect for the new TF
+      if (candles.length) autoFitY();
+      setEl('ov-candles', candles.length);
+      setEl('ov-tick', '—');
+      dirty = true; // always — render() guards against empty candles itself
+
+      // Tell backend to change active interval + re-warm all caches
       BackendWS.send({ type: 'set_interval', seconds: newIv });
     });
 
@@ -322,7 +330,6 @@ window.FootprintPage = (() => {
     const coinChanged  = incomingCoin !== _activeCoin;
 
     if (coinChanged) {
-      // Full wipe — new market
       _candleCache   = {};
       _activeCoin    = incomingCoin;
       midPrice       = null;
@@ -337,12 +344,12 @@ window.FootprintPage = (() => {
       setEl('ov-range', '—');
     }
 
-    // Merge backend snapshot into local cache (never blindly replace)
+    // Merge into cache — mutates in place so all live references stay valid
     _mergeIntoCache(incomingIv, msg.candles || []);
 
-    // If this update is for the active interval, point candles at it
     if (incomingIv === _activeInterval) {
-      candles = _getCache(_activeInterval);
+      // candles already points to _candleCache[_activeInterval] which was
+      // just mutated in place — no need to re-assign, just re-render
       if (candles.length) {
         const last = candles[candles.length - 1];
         midPrice = last.close || last.open || midPrice;
@@ -357,7 +364,7 @@ window.FootprintPage = (() => {
     const iv = msg.interval ?? _activeInterval;
     const c  = msg.candle; if (!c) return;
 
-    // Always write into the correct interval cache
+    // Always write into the correct interval cache — ALL intervals stay live
     const cache = _getCache(iv);
     if (!cache.length) {
       cache.push(c);
@@ -372,10 +379,10 @@ window.FootprintPage = (() => {
       }
     }
 
-    // Only re-render if this tick is for the active interval
+    // Only trigger a re-render for the active interval
     if (iv !== _activeInterval) return;
 
-    candles  = cache;
+    // candles already points to this same cache array — just update midPrice
     midPrice = c.close || c.open;
     if (!userZoomY) autoFitY();
     updatePriceDisplay(c);
@@ -477,7 +484,6 @@ window.FootprintPage = (() => {
     const visCols  = Math.floor(HEAT_W / colPx);
     const startIdx = Math.max(0, candles.length - visCols);
 
-    // Auto-detect tick size once per dataset
     if (!tickSize && candles.length) {
       const lvObj = candles[candles.length - 1].levels;
       if (lvObj) {
@@ -508,12 +514,16 @@ window.FootprintPage = (() => {
 
   // ─ Lifecycle ─────────────────────────────────────────────────
   function onShow()      { resize(); dirty = true; }
+
   function onConnected() {
     document.getElementById('fp-dot')?.classList.add('live');
     setEl('fp-status-text', 'Live');
     document.getElementById('fp-waiting')?.classList.add('hidden');
-    BackendWS.send({ type: 'set_coin', coin: cfg.coin });
+    // Use get_all_snapshots — does NOT trigger _reset() on the backend.
+    // set_coin is only sent when the user explicitly changes the coin input.
+    BackendWS.send({ type: 'get_all_snapshots' });
   }
+
   function onDisconnected() {
     document.getElementById('fp-dot')?.classList.remove('live');
     setEl('fp-status-text', 'Reconnecting…');
